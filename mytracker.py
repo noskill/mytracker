@@ -118,10 +118,12 @@ class Editor:
             f.write(self.df.to_csv(index=True, header=False))
 
     def track_to_table(self):
+        new_id = int(input("track id:"))
         col_dict = dict()
-        col_dict['FrameId'] = numpy.asarray(sorted(self.editor_track.keys()))
-        col_dict['Id'] = numpy.stack([x[1] for x in self.editor_track.values()]).squeeze().astype(numpy.int16)
-        tlwh = numpy.stack([x[0] for x in self.editor_track.values()]).squeeze()
+        keys = sorted(self.editor_track.keys())
+        col_dict['FrameId'] = numpy.asarray(keys)
+        col_dict['Id'] = numpy.stack([new_id for k in keys]).squeeze().astype(numpy.int16)
+        tlwh = numpy.stack([self.editor_track[k][0] for k in keys]).squeeze()
         col_dict['X'] = tlwh[:, COL]
         col_dict['Y'] = tlwh[:, ROW]
         col_dict['Width'] = tlwh[:, WIDTH]
@@ -192,7 +194,7 @@ class Editor:
     def smooth(self):
         keys = sorted(self.editor_track.keys())
         stacked = numpy.stack([self.editor_track[k][0] for k in keys]).squeeze()
-        smoothed = numpy.stack([smooth(stacked[:, i], window_len=3, window='flat') for i in range(stacked.shape[1])]).T
+        smoothed = numpy.stack([smooth(stacked[:, i], window_len=7, window='flat') for i in range(stacked.shape[1])]).T
         for i, key in enumerate(keys):
             self.editor_track[key][0] = smoothed[i]
 
@@ -259,19 +261,24 @@ class Editor:
             boxes.clear()
 
     def next(self):
-        i = 900
-        valid_frames = set(x[0] for x in self.df.index.values)
+        i = 0
         while True:
             i = max(i, 0)
             self.frame_id = i + 1
-            _, _, img = self.dataloader[i]
+            self.frame_id = min(self.frame_id, len(self.dataloader) - 1)
+            i = self.frame_id - 1
+            _, _, img = self.dataloader[self.frame_id]
             self.img = img
             # img_path = os.path.join(img_dir, f)
             # img = cv2.imread(img_path)
             #cv2.imshow("img", img)
 
-            if self.frame_id in valid_frames:
+            frame_data = None
+            try:
                 frame_data = self.df.xs(self.frame_id, level='FrameId')
+            except KeyError as e:
+                self.frame = img
+            if frame_data is not None:
                 tlwh = frame_data[['X', 'Y', 'Width', 'Height']].to_numpy()
                 track_id = frame_data.index.values
                 self.frame = vis.plot_tracking(img,
@@ -279,10 +286,14 @@ class Editor:
                                           track_id,
                                           frame_id=self.frame_id,
                                           fps=1.)
-            else:
-                self.frame = img
+
             self.show(self.frame)
             self.redraw_track()
+            # cv2.imwrite(os.path.join('./results', '{:05d}.png'.format(self.frame_id)), self.frame)
+            # i += 1
+
+            if i >= 6599:
+                break
             k = cv2.waitKey(0)
 
             if k == 8:  # back
@@ -301,7 +312,6 @@ class Editor:
                 self.left()
             elif k == 100:  # d
                 self.right()
-            print(k)
 
     def up(self):
         value = -1
@@ -374,9 +384,13 @@ class Editor:
         cv2.imshow('frame', frame)
 
 
+
+names = ['FrameId', 'Id', 'X', 'Y', 'Width', 'Height', 'Confidence', 'ClassId', 'Visibility']
+
+
 def show_box():
     video_path = '/mnt/fileserver/shared/datasets/cameras/Odessa/Duke_on_the_left/fragments/child/child_set005_00:16:20-00:20:00.mp4'
-    dataloader = datasets.LoadVideo(video_path)
+    dataloader = datasets.LoadVideo(video_path, img_size = (1920, 1080))
     path = '/mnt/fileserver/shared/datasets/MOT/MOT17Det/train/MOT17-04/'
     fname = os.path.join(path, 'gt', 'gt.txt')
     img_dir = os.path.join(path, 'img1')
@@ -394,6 +408,7 @@ def show_box():
         names=names,
         engine='python'
     )
+
     # Remove all rows without sufficient confidence
     df = df[df['Confidence'] >= min_confidence]
     editor = Editor(dataloader, df, fname)
